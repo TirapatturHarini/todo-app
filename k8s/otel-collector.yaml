@@ -1,0 +1,297 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+      filelog:
+        include: 
+          - /var/log/pods/default_*todo*/*/*.log
+          - /var/log/pods/*_*todo*/*/*.log
+        exclude:
+          - /var/log/pods/kube-system_*/*/*.log
+          - /var/log/pods/observability_loki*/*/*.log
+          - /var/log/pods/observability_tempo*/*/*.log
+          - /var/log/pods/observability_mimir*/*/*.log
+          - /var/log/pods/observability_grafana*/*/*.log
+        start_at: beginning
+        operators:
+          # First parser - handle standard Kubernetes log format
+          - type: regex_parser
+            regex: '^(?P<time>\S+) (?P<stream>stdout|stderr) (?P<logtag>[FP]) (?P<log>.*)$'
+            parse_from: body
+            on_error: send
+            
+          # Second parser - handle application logs with trace info (conditional)
+          - type: regex_parser
+            regex: '(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) (?P<level>\w+) \[trace_id=(?P<trace_id>[a-f0-9]{32}|[a-f0-9]{0}) span_id=(?P<span_id>[a-f0-9]{16}|[a-f0-9]{0}) status=(?P<status>[^\]]+)\] (?P<message>.*)'
+            parse_from: attributes.log
+            if: 'attributes.log != nil and attributes.log matches "\\d{4}-\\d{2}-\\d{2}.*\\[trace_id="'
+            on_error: send
+            
+          # Third parser - handle simple application logs without trace info
+          - type: regex_parser
+            regex: '(?P<timestamp>\d{4}-\d{2}-\d{2}[T ][\d:,.-]+) (?P<level>\w+) (?P<message>.*)'
+            parse_from: attributes.log
+            if: 'attributes.log != nil and attributes.log matches "\\d{4}-\\d{2}-\\d{2}"'
+            on_error: send
+            
+          # Fourth parser - handle JSON formatted logs
+          - type: json_parser
+            parse_from: attributes.log
+            if: 'attributes.log != nil and attributes.log matches "^\\s*\\{"'
+            on_error: send
+            
+          # Filter for relevant logs
+          - type: filter
+            expr: 'body matches ".*todo.*" or body matches ".*TODO.*" or body matches ".*health.*" or body matches ".*ready.*" or attributes.level != nil or attributes.message != nil'
+            
+          # Move parsed message to body if available
+          - type: move
+            from: attributes.message
+            to: body
+            if: 'attributes.message != nil'
+
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: 'loki'
+              static_configs:
+                - targets: ["loki:3100"]
+              metrics_path: /metrics
+            - job_name: 'tempo'
+              static_configs:
+                - targets: ["tempo:3200"]
+              metrics_path: /metrics
+            - job_name: 'mimir'
+              static_configs:
+                - targets: ["mimir:9009"]
+              metrics_path: /metrics
+
+    processors:   
+      batch:
+        timeout: 5s             
+        send_batch_size: 100    
+        send_batch_max_size: 200
+      
+      k8sattributes:
+        auth_type: serviceAccount
+        filter:
+          node_from_env_var: KUBE_NODE_NAME
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.container.name
+            - k8s.deployment.name
+          labels:
+            - tag_name: app_name
+              key: app
+            - tag_name: service_name  
+              key: app.kubernetes.io/name
+      
+      filter/application_logs_only:
+        logs:
+          log_record:
+            - 'IsMatch(body, "(?i).*(todo|health|ready|start|shut).*") or IsMatch(resource.attributes["k8s.pod.name"], ".*todo.*") or IsMatch(resource.attributes["k8s.deployment.name"], ".*todo.*") or IsMatch(resource.attributes["k8s.container.name"], ".*todo.*")'
+
+      transform/normalize_app_logs:
+        log_statements:          
+          - context: log
+            statements:
+              - set(attributes["operation"], "create_todo") where IsMatch(body, "(?i).*(Creating|POST).*todo.*")
+              - set(attributes["operation"], "get_todos") where IsMatch(body, "(?i).*(Fetching todos|GET.*todos).*skip.*")
+              - set(attributes["operation"], "get_todo") where IsMatch(body, "(?i).*(Fetching todo.*ID|GET.*todo/).*")
+              - set(attributes["operation"], "update_todo") where IsMatch(body, "(?i).*(Updating|PUT).*todo.*")
+              - set(attributes["operation"], "delete_todo") where IsMatch(body, "(?i).*(Deleting|DELETE).*todo.*")
+              - set(attributes["operation"], "complete_todo") where IsMatch(body, "(?i).*(Completing|complete).*todo.*")
+              - set(attributes["operation"], "health_check") where IsMatch(body, "(?i).*health.*check.*")
+              - set(attributes["service_name"], resource.attributes["k8s.deployment.name"]) where resource.attributes["k8s.deployment.name"] != nil
+              - set(attributes["todo_status"], attributes["status"]) where attributes["status"] != nil and IsMatch(attributes["status"], "(?i).*(todo|complet|creat|updat|delet).*")
+              # Clean up temporary attributes
+              - delete_key(attributes, "log")
+              - delete_key(attributes, "time") 
+              - delete_key(attributes, "stream")
+              - delete_key(attributes, "logtag")
+
+      resource:
+        attributes:
+          - action: upsert
+            key: service.name
+            from_attribute: k8s.deployment.name
+          - action: upsert
+            key: service.version
+            value: "1.0"
+
+      attributes/loki_labels:
+        actions:
+          - action: insert
+            key: loki.attribute.labels  
+            value: level,operation,service_name,business_status,k8s.namespace.name,k8s.pod.name
+          
+      transform/add_exemplar_attributes:  
+        metric_statements:
+          - context: datapoint
+            statements:
+              - set(attributes["trace_id"], resource.attributes["trace_id"]) where resource.attributes["trace_id"] != nil
+              - set(attributes["span_id"], resource.attributes["span_id"]) where resource.attributes["span_id"] != nil
+              - set(attributes["service.name"], resource.attributes["service.name"]) where resource.attributes["service.name"] != nil
+              - set(attributes["service_name"], resource.attributes["service.name"]) where resource.attributes["service.name"] != nil
+
+    exporters:
+      debug:
+        verbosity: basic
+        sampling_initial: 2
+        sampling_thereafter: 500
+
+      prometheusremotewrite:
+        endpoint: http://mimir:9009/api/v1/push
+        headers:
+          X-Scope-OrgID: tenant-1
+        add_metric_suffixes: false
+        send_metadata: true
+        timeout: 60s
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 60s
+          max_elapsed_time: 600s 
+                  
+      loki:
+        endpoint: http://loki:3100/loki/api/v1/push
+        headers:
+          X-Scope-OrgID: tenant-1
+        
+      otlp/tempo:
+        endpoint: tempo:4317
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
+        logs:
+          receivers: [filelog, otlp]
+          processors: [
+            filter/application_logs_only,
+            k8sattributes, 
+            resource,
+            transform/normalize_app_logs,
+            attributes/loki_labels,
+            batch
+          ]
+          exporters: [loki, debug]
+
+        metrics:
+          receivers: [otlp,prometheus]  
+          processors: [
+            k8sattributes,
+            transform/add_exemplar_attributes,
+            batch
+          ]
+          exporters: [prometheusremotewrite]
+
+        traces:
+          receivers: [otlp]
+          processors: [batch, k8sattributes]
+          exporters: [otlp/tempo, debug]
+
+      telemetry:
+        metrics:
+          level: "basic"
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: "0.0.0.0"
+                    port: 8888
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: observability 
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.126.0
+          args: ["--config=/etc/otel/config/otel-collector-config.yaml"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi" 
+              cpu: "500m"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel/config
+            - name: varlogpods                 
+              mountPath: /var/log/pods
+              readOnly: true
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+            - name: metrics
+              containerPort: 8888
+          env:
+            - name: GOMEMLIMIT
+              value: "400MiB"
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+            items:
+              - key: otel-collector-config.yaml
+                path: otel-collector-config.yaml
+        - name: varlogpods                     
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: observability 
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+    - name: metrics
+      port: 8888
+      targetPort: metrics

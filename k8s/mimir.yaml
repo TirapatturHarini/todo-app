@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mimir
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mimir
+  template:
+    metadata:
+      labels:
+        app: mimir
+    spec:
+      containers:
+        - name: mimir
+          image: grafana/mimir:2.14.0
+          args: ["-config.file=/etc/mimir/mimir.yaml"]
+          ports:
+            - name: http
+              containerPort: 9009
+            - name: grpc
+              containerPort: 9095
+          env:
+            - name: JAEGER_AGENT_HOST
+              value: "tempo"
+            - name: JAEGER_AGENT_PORT
+              value: "14268"
+          # Add resource limits to prevent OOM
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+          # Add health checks
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 9009
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9009
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mimir
+            - name: runtime-config
+              mountPath: /data/mimir/runtime.yaml
+              subPath: runtime.yaml
+            - name: data
+              mountPath: /data/mimir
+      volumes:
+        - name: config
+          configMap:
+            name: mimir-config
+            items:
+              - key: mimir.yaml
+                path: mimir.yaml
+        - name: runtime-config
+          configMap:
+            name: mimir-runtime-config
+            items:
+              - key: runtime.yaml
+                path: runtime.yaml
+        - name: data
+          persistentVolumeClaim:
+            claimName: mimir-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mimir
+  namespace: observability
+spec:
+  selector:
+    app: mimir
+  ports:
+    - name: http
+      port: 9009
+      targetPort: 9009
+    - name: grpc
+      port: 9095
+      targetPort: 9095

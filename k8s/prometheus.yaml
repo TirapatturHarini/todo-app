@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: observability
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      # Add a NEW job to scrape direct Prometheus metrics with exemplars
+      - job_name: 'todo-api-direct'
+        scrape_interval: 5s
+        static_configs:
+          - targets: ['todo-api:8080']
+        metrics_path: '/metrics/prometheus'
+        scrape_timeout: 5s
+        exemplar_config:
+          max_exemplars: 100
+
+      # Keep your existing OTLP job for traces/logs
+      - job_name: 'todo-api-otlp'
+        scrape_interval: 15s
+        static_configs:
+          - targets: ['otel-collector:8889']
+        metrics_path: '/metrics'
+
+    remote_write:
+      - url: http://mimir:9009/api/v1/push
+        metadata_config:
+          send: true
+          send_interval: 30s
+        write_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'todo_.*'
+            action: keep
+
+    storage:
+      exemplars:
+        exemplar_storage: true
+        max_exemplars: 1000

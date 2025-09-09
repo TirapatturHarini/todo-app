@@ -1,0 +1,145 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: observability
+type: Opaque
+data:
+  # base64("todouser")
+  POSTGRES_USER: dG9kb3VzZXI=
+  # base64("todopass")
+  POSTGRES_PASSWORD: dG9kb3Bhc3M=
+  # base64("tododb")
+  POSTGRES_DB: dG9kb2Ri
+  
+  
+---
+# Replace the placeholder SQL with your real schema (what you use in Compose's init_db.sql)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: observability
+data:
+  init_db.sql: |
+    -- Create user if not exists
+    DO
+    $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'todouser') THEN
+          CREATE USER todouser WITH PASSWORD 'todopass';
+      END IF;
+    END
+    $$;
+
+    -- Create database if not exists
+    DO
+    $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_database WHERE datname = 'tododb') THEN
+          CREATE DATABASE tododb OWNER todouser;
+      END IF;
+    END
+    $$;
+
+    -- Connect to tododb
+    \connect tododb;
+
+    -- Make sure schema is owned by todouser
+    ALTER SCHEMA public OWNER TO todouser;
+
+    -- Grant full privileges on schema
+    GRANT ALL PRIVILEGES ON SCHEMA public TO todouser;
+    GRANT CREATE, USAGE ON SCHEMA public TO todouser;
+
+    -- Ensure default privileges for future tables/sequences
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+      GRANT ALL ON TABLES TO todouser;
+
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+      GRANT ALL ON SEQUENCES TO todouser;
+
+    -- Create todos table if not exists
+    CREATE TABLE IF NOT EXISTS todos (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(200) NOT NULL,
+        description VARCHAR(1000),
+        completed BOOLEAN NOT NULL DEFAULT false,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: observability
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      securityContext:
+        fsGroup: 999   # postgres
+      containers:
+        - name: postgres
+          image: postgres:15
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-secret
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgres-storage
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["pg_isready","-U","todouser","-d","tododb","-h","127.0.0.1"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+        - name: init-sql
+          configMap:
+            name: postgres-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: observability
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

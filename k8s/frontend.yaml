@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-frontend
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: todo-frontend
+  template:
+    metadata:
+      labels:
+        app: todo-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: harinitirapattur/todo-otel-app-frontend:v8
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            # IMPORTANT: the browser must hit localhost (via port-forward)
+            - name: REACT_APP_API_URL
+              value: http://localhost:8080
+              # value: http://todo-backend:8080
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: "3000"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: todo-frontend
+  namespace: observability
+spec:
+  # type: LoadBalancer
+  selector:
+    app: todo-frontend
+  ports:
+    - port: 3000
+      targetPort: 3000

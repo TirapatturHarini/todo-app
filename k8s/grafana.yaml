@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-admin-credentials
+  namespace: observability
+type: Opaque
+stringData:
+  admin-user: admin
+  admin-password: admin
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: observability
+  labels:
+    grafana_datasource: "1"
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+        isDefault: false
+        uid: loki-uid
+        jsonData:
+          derivedFields:
+            - name: TraceID
+              matcherRegex: '(?:trace_?[iI]d[":=\s]+)([a-f0-9]{32})'
+              url: "$${__value.raw}"
+              datasourceUid: tempo-uid
+              urlDisplayLabel: "View Trace"
+              internal:
+                displayMode: "table"
+
+      - name: Tempo
+        type: tempo
+        access: proxy
+        url: http://tempo:3200
+        isDefault: false
+        uid: tempo-uid
+        jsonData:
+          tracesToLogsV2:
+            datasourceUid: loki-uid
+            spanStartTimeShift: "-1h"
+            spanEndTimeShift: "1h"
+            filterByTraceID: true
+            customQuery: true
+            query: '{job="todo-backend"} |= "$${__trace.traceId}"'
+            tags:
+              - key: "service.name"
+                value: "service_name"
+          tracesToMetrics:
+            datasourceUid: mimir-uid
+            tags:
+              - key: "service.name"
+                value: "todo-api"
+              - key: "operation"
+                value: "operation"
+            queries:
+              - name: "Request Rate"
+                query: 'sum(rate(traces_spanmetrics_calls_total{$$__tags}[$$__rate_interval]))'
+              - name: "Request Duration"  
+                query: 'histogram_quantile(0.9, sum(rate(traces_spanmetrics_latency_bucket{$$__tags}[$$__rate_interval])) by (le))'
+          nodeGraph:
+            enabled: true
+          lokiSearch:
+            datasourceUid: loki-uid
+
+      - name: Mimir
+        type: prometheus
+        url: http://mimir.observability.svc.cluster.local:9009/prometheus
+        access: proxy
+        isDefault: true
+        jsonData:
+          httpMethod: POST
+          # This fixes the "no org id" error
+          httpHeaderName1: 'X-Scope-OrgID'
+          exemplarTraceIdDestinations:
+            - name: traceID
+              datasourceUid: tempo-uid
+              url: 'http://localhost:3001/explore?left={"datasource":"tempo-uid","queries":[{"refId":"A","queryType":"traceId","query":"${__value.raw}"}],"range":{"from":"now-1h","to":"now"}}'
+        secureJsonData:
+          httpHeaderValue1: 'tenant-1'
+        
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      securityContext:
+        fsGroup: 472
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.5.2   
+          ports:
+            - containerPort: 3001
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-credentials
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-credentials
+                  key: admin-password
+            - name: GF_SERVER_HTTP_PORT
+              value: "3001"
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+          volumeMounts:
+            - name: grafana-storage
+              mountPath: /var/lib/grafana
+            - name: grafana-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+      volumes:
+        - name: grafana-storage
+          persistentVolumeClaim:
+            claimName: grafana-pvc
+        - name: grafana-datasources
+          configMap:
+            name: grafana-datasources
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: observability
+spec:
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001
+      nodePort: 32001
+  type: NodePort

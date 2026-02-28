@@ -100,6 +100,20 @@ data:
       filesystem:
         dir: /data/mimir/alertmanager/storage
 
+    # # Add scrape configs
+    # prometheus:
+    #   global:
+    #     scrape_interval: 15s
+    #   scrape_configs:
+    #     - job_name: mimir
+    #       static_configs:
+    #         - targets: ['localhost:9009']
+    #       relabel_configs:
+    #         - source_labels: [__address__]
+    #           target_label: service_name
+    #           replacement: mimir
+
+
 ---
 apiVersion: v1
 kind: ConfigMap

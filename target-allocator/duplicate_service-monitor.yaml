@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: metrics-app-sm
+  namespace: observability
+spec:
+  selector:
+    matchLabels:
+      app: metrics-app
+  namespaceSelector:
+    matchNames:
+      - observability
+  endpoints:
+    - port: metrics
+      interval: 15s

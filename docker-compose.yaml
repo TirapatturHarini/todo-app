@@ -1,0 +1,161 @@
+
+services:
+  # Database
+  postgres:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: todouser
+      POSTGRES_PASSWORD: todopass
+      POSTGRES_DB: tododb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U todouser -d tododb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  # Backend API
+  backend:
+    build: ./backend
+    container_name: todo-backend
+    environment:
+      DATABASE_URL: postgresql://todouser:todopass@postgres:5432/tododb
+      OTEL_SERVICE_NAME: todo-api
+      OTEL_SERVICE_VERSION: 1.0.0
+      OTEL_DEPLOYMENT_ENVIRONMENT: development
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: http://otel-collector:4318/v1/logs
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
+      OTEL_PYTHON_LOG_CORRELATION: "true"
+      OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: "true"
+      
+    ports:
+      - "8080:8080"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8080
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      
+    
+
+  # Frontend (Python HTTP server, no nginx)
+  frontend:
+    build: ./frontend
+    container_name: todo-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    
+
+  # OpenTelemetry Collector
+  # otel-collector:
+  #   image: otel/opentelemetry-collector-contrib:0.89.0
+  #   container_name: otel-collector
+  #   command: ["--config=/etc/otel-collector-config.yaml"]
+  #   volumes:
+  #     - ./observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+  #   ports:
+  #     - "4316:4317"   # OTLP gRPC receiver
+  #     - "4318:4318"   # OTLP HTTP receiver
+  #     - "8888:8888"   # Prometheus metrics
+  #     - "8889:8889"   # Prometheus exporter metrics
+  #   depends_on:
+  #     - tempo
+  #     - loki
+  #     - mimir
+    
+  # # Tempo (Distributed Tracing)
+  # tempo:
+  #   image: grafana/tempo:2.3.0
+  #   container_name: tempo
+  #   command: 
+  #     - -config.file=/etc/tempo.yaml
+  #   volumes:
+  #     - ./observability/tempo.yaml:/etc/tempo.yaml
+  #     - tempo_data:/var/tempo
+  #   ports:
+  #     - "3200:3200"   # Tempo HTTP
+  #     - "4317:4317"   # OTLP gRPC (alternative)
+  
+
+  # Loki (Log Aggregation)
+  # loki:
+  #   image: grafana/loki:2.9.0
+  #   container_name: loki
+  #   command: -config.file=/etc/loki/local-config.yaml
+  #   volumes:
+  #     - ./observability/loki.yaml:/etc/loki/local-config.yaml
+  #     - loki_data:/loki
+  #   ports:
+  #     - "3100:3100"
+   
+
+  # Mimir (Metrics Storage)
+  # mimir:
+  #   image: grafana/mimir:2.10.0
+  #   container_name: mimir
+  #   command: 
+  #     - -config.file=/etc/mimir.yaml
+  #     - -target=all,alertmanager
+  #   volumes:
+  #     - ./observability/mimir.yaml:/etc/mimir.yaml
+  #     - mimir_data:/data
+  #   ports:
+  #     - "9009:9009"   # Mimir HTTP
+    
+  # # Grafana (Observability Dashboard)
+  # grafana:
+  #   image: grafana/grafana:10.2.0
+  #   container_name: grafana
+  #   environment:
+  #     GF_SECURITY_ADMIN_PASSWORD: admin
+  #     GF_USERS_ALLOW_SIGN_UP: "false"
+  #     GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+  #     GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource
+  #   volumes:
+  #     - ./observability/grafana/provisioning:/etc/grafana/provisioning
+  #     - ./observability/grafana/dashboards:/var/lib/grafana/dashboards
+  #     - grafana_data:/var/lib/grafana
+  #   ports:
+  #     - "3001:3000"
+  #   depends_on:
+  #     - mimir
+  #     - loki
+  #     - tempo
+    
+
+  # # Prometheus (for additional monitoring)
+  # prometheus:
+  #   image: prom/prometheus:v2.47.0
+  #   container_name: prometheus
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #     - '--web.console.libraries=/etc/prometheus/console_libraries'
+  #     - '--web.console.templates=/etc/prometheus/consoles'
+  #     - '--storage.tsdb.retention.time=15d'
+  #     - '--web.enable-lifecycle'
+  #   volumes:
+  #     - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
+  #     - prometheus_data:/prometheus
+  #   ports:
+  #     - "9090:9090"
+    
+
+volumes:
+  postgres_data:
+  tempo_data:
+  loki_data:
+  mimir_data:
+  grafana_data:
+  prometheus_data:
+
+
+    

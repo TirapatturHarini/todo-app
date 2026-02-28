@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: harinitirapattur/todo-otel-app-backend:v37
+          image: harinitirapattur/todo-otel-app-backend:v47
           ports:
             - containerPort: 8080
           env:

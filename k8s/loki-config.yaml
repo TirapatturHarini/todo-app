@@ -34,9 +34,11 @@ data:
     schema_config:
       configs:
         - from: 2020-10-24
-          store: boltdb-shipper
+          # store: boltdb-shipper
+          store: tsdb
           object_store: filesystem
-          schema: v11
+          # schema: v11
+          schema: v13
           index:
             prefix: index_
             period: 24h
@@ -54,9 +56,10 @@ data:
       ingestion_burst_size_mb: 32
       per_stream_rate_limit: 512M
       per_stream_rate_limit_burst: 1024M
+      allow_structured_metadata: true
 
-    chunk_store_config:
-      max_look_back_period: 0s
+    # chunk_store_config:
+    #   max_look_back_period: 0s
 
     table_manager:
       retention_deletes_enabled: false
@@ -64,15 +67,22 @@ data:
 
     compactor:
       working_directory: /loki/boltdb-shipper-compactor
-      shared_store: filesystem
+      delete_request_store: filesystem
+      # shared_store: filesystem
 
+    distributor:
+      otlp_config:
+        default_resource_attributes_as_index_labels:
+          - service.name          # this maps resource.service.name → label service_name
+          - k8s.namespace.name
+          - k8s.pod.name
     ingester:
       max_chunk_age: 1h
       chunk_idle_period: 30m
       chunk_block_size: 262144
       chunk_target_size: 1048576
       chunk_retain_period: 30s
-      max_transfer_retries: 0
+      # max_transfer_retries: 0
       
       wal:
         enabled: true

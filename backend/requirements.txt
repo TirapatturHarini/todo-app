@@ -1,0 +1,24 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+pydantic==2.5.0
+python-multipart==0.0.6
+requests==2.31.0
+python-json-logger==2.0.7
+statsd==3.3.0
+prometheus_client>=0.16.0
+
+# OpenTelemetry core
+opentelemetry-api==1.27.0
+opentelemetry-sdk==1.27.0
+opentelemetry-distro[otlp]==0.48b0
+
+# Exporters
+opentelemetry-exporter-otlp-proto-grpc==1.27.0
+
+# Instrumentation (all same line)
+opentelemetry-instrumentation-fastapi==0.48b0
+opentelemetry-instrumentation-requests==0.48b0
+opentelemetry-instrumentation-sqlalchemy==0.48b0
+opentelemetry-instrumentation-asgi==0.48b0

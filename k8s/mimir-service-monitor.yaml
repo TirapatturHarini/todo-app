@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mimir
+  namespace: observability
+spec:
+  selector:
+    matchLabels:
+      app: mimir
+  endpoints:
+    - port: http
+      interval: 15s
+      relabelings:
+        - targetLabel: service_name
+          replacement: mimir
+        - targetLabel: deployment_environment_name
+          replacement: aws-nonprod

@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: duplicate-otel
+  namespace: observability
+spec:
+  mode: deployment
+  replicas: 2   # two collectors scraping same target
+  targetAllocator:
+    enabled: false
+  config: |
+    receivers:
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: 'backend'
+              static_configs:
+                - targets: ['todo-backend:8080']
+    exporters:
+      otlp:
+        endpoint: mimir:4317
+        tls:
+          insecure: true
+    service:
+      pipelines:
+        metrics:
+          receivers: [prometheus]
+          exporters: [otlp]

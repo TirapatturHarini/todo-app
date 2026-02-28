@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: harinitirapattur/todo-otel-app-frontend:v8
+          image: harinitirapattur/todo-otel-app-frontend:v11
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000

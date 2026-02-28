@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@middleware.io/sourcemap-uploader": "^0.1.6"
+  }
+}

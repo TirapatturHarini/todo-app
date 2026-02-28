@@ -22,3 +22,5 @@ opentelemetry-instrumentation-fastapi==0.48b0
 opentelemetry-instrumentation-requests==0.48b0
 opentelemetry-instrumentation-sqlalchemy==0.48b0
 opentelemetry-instrumentation-asgi==0.48b0
+
+

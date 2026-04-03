@@ -105,6 +105,20 @@ spec:
     spec:
       securityContext:
         fsGroup: 999   # postgres
+      initContainers:
+        - name: init-sql-permissions
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              cp /tmp/init-sql/init_db.sql /docker-entrypoint-initdb.d/init_db.sql
+              chmod 0644 /docker-entrypoint-initdb.d/init_db.sql
+          volumeMounts:
+            - name: init-sql
+              mountPath: /tmp/init-sql
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
       containers:
         - name: postgres
           image: postgres:15
@@ -116,9 +130,8 @@ spec:
           volumeMounts:
             - mountPath: /var/lib/postgresql/data
               name: postgres-storage
-            - name: init-sql
+            - name: init-scripts
               mountPath: /docker-entrypoint-initdb.d
-              readOnly: true
           readinessProbe:
             exec:
               command: ["pg_isready","-U","todouser","-d","tododb","-h","127.0.0.1"]
@@ -131,6 +144,9 @@ spec:
         - name: init-sql
           configMap:
             name: postgres-init
+            defaultMode: 0444
+        - name: init-scripts
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

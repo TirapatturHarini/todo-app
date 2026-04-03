@@ -4,23 +4,22 @@ from typing import Dict, Any, Optional
 from contextlib import contextmanager
 from fastapi import FastAPI
 import time
-from opentelemetry.sdk.metrics import Histogram, Counter
-from opentelemetry import trace, metrics, _logs
-# from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-from opentelemetry.instrumentation.requests import RequestsInstrumentor
-from opentelemetry.trace.status import Status, StatusCode
-from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
+from opentelemetry import trace, metrics
+
+try:
+    from opentelemetry import _logs
+except Exception:
+    _logs = None
+
+try:
+    from opentelemetry.trace.status import Status, StatusCode
+except Exception:
+    class StatusCode:
+        ERROR = "ERROR"
+
+    class Status:
+        def __init__(self, *args, **kwargs):
+            pass
 
 
 from statsd import StatsClient
@@ -37,9 +36,19 @@ def record_request():
 
 
 def init_telemetry(app: FastAPI):
-    FastAPIInstrumentor().instrument_app(app)
-    SQLAlchemyInstrumentor().instrument()
-    RequestsInstrumentor().instrument()
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+        from opentelemetry.instrumentation.requests import RequestsInstrumentor
+
+        FastAPIInstrumentor().instrument_app(app)
+        SQLAlchemyInstrumentor().instrument()
+        RequestsInstrumentor().instrument()
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "OpenTelemetry auto-instrumentation disabled due to import/runtime mismatch: %s",
+            exc,
+        )
 
 
 class TraceIdSpanIdFilter(logging.Filter):
@@ -84,68 +93,81 @@ def setup_telemetry(app: FastAPI):
     environment = os.getenv("ENVIRONMENT", "development")
     otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4317")
 
-    resource = Resource.create(
-        {
-            "service.name": service_name,
-            "service.version": service_version,
-            "deployment.environment": environment,
-            "service.instance.id": os.getenv("HOSTNAME", "unknown"),
-        }
-    )
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
 
-    # Tracing
-    trace.set_tracer_provider(TracerProvider(resource=resource))
-    tracer_provider = trace.get_tracer_provider()
-    otlp_span_exporter = OTLPSpanExporter(endpoint=otel_endpoint, insecure=True)
-    tracer_provider.add_span_processor(BatchSpanProcessor(otlp_span_exporter))
+        resource = Resource.create(
+            {
+                "service.name": service_name,
+                "service.version": service_version,
+                "deployment.environment": environment,
+                "service.instance.id": os.getenv("HOSTNAME", "unknown"),
+            }
+        )
 
-    # CRITICAL: Setup metrics with explicit histogram buckets for better exemplar support
-    metric_reader = PeriodicExportingMetricReader(
-        OTLPMetricExporter(endpoint=otel_endpoint, insecure=True),
-        export_interval_millis=10000,  # Export every 10 seconds for faster exemplar updates
-    )
-    
-    # Create custom views for histograms with explicit buckets (better for exemplars)
-    histogram_buckets = [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0]
-    views = [
-        View(
-            instrument_name="http_request_duration_seconds",
-            aggregation=ExplicitBucketHistogramAggregation(boundaries=histogram_buckets),
-        ),
-        View(
-            instrument_name="todo_created_duration_seconds",
-            aggregation=ExplicitBucketHistogramAggregation(boundaries=histogram_buckets),
-        ),
-        View(
-            instrument_name="todo_updated_duration_seconds",
-            aggregation=ExplicitBucketHistogramAggregation(boundaries=histogram_buckets),
-        ),
-        View(
-            instrument_name="todo_deleted_duration_seconds",
-            aggregation=ExplicitBucketHistogramAggregation(boundaries=histogram_buckets),
-        ),
-    ]
-    
-    metrics.set_meter_provider(MeterProvider(
-        resource=resource, 
-        metric_readers=[metric_reader],
-        views=views
-    ))
+        trace.set_tracer_provider(TracerProvider(resource=resource))
+        tracer_provider = trace.get_tracer_provider()
+        otlp_span_exporter = OTLPSpanExporter(endpoint=otel_endpoint, insecure=True)
+        tracer_provider.add_span_processor(BatchSpanProcessor(otlp_span_exporter))
 
-    # Logging with enhanced configuration for Loki labels
-    _logs.set_logger_provider(LoggerProvider(resource=resource))
-    logger_provider = _logs.get_logger_provider()
-    otlp_log_exporter = OTLPLogExporter(endpoint=otel_endpoint, insecure=True)
-    logger_provider.add_log_record_processor(BatchLogRecordProcessor(otlp_log_exporter))
+        metric_reader = PeriodicExportingMetricReader(
+            OTLPMetricExporter(endpoint=otel_endpoint, insecure=True),
+            export_interval_millis=10000,
+        )
 
-    otel_handler = LoggingHandler(logger_provider=logger_provider)
-    logging.getLogger().addHandler(otel_handler)
+        histogram_buckets = [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0]
+        views = [
+            View(
+                instrument_name="http_request_duration_seconds",
+                aggregation=ExplicitBucketHistogramAggregation(boundaries=histogram_buckets),
+            ),
+            View(
+                instrument_name="todo_created_duration_seconds",
+                aggregation=ExplicitBucketHistogramAggregation(boundaries=histogram_buckets),
+            ),
+            View(
+                instrument_name="todo_updated_duration_seconds",
+                aggregation=ExplicitBucketHistogramAggregation(boundaries=histogram_buckets),
+            ),
+            View(
+                instrument_name="todo_deleted_duration_seconds",
+                aggregation=ExplicitBucketHistogramAggregation(boundaries=histogram_buckets),
+            ),
+        ]
 
-    # FIXED: Apply the trace filter to existing handlers
-    # This needs to happen AFTER your main.py setup_logging() has run
-    trace_filter = TraceIdSpanIdFilter()
-    for handler in logging.getLogger().handlers:
-        handler.addFilter(trace_filter)
+        metrics.set_meter_provider(
+            MeterProvider(resource=resource, metric_readers=[metric_reader], views=views)
+        )
+
+        if _logs is not None:
+            from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+            from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
+            _logs.set_logger_provider(LoggerProvider(resource=resource))
+            logger_provider = _logs.get_logger_provider()
+            otlp_log_exporter = OTLPLogExporter(endpoint=otel_endpoint, insecure=True)
+            logger_provider.add_log_record_processor(BatchLogRecordProcessor(otlp_log_exporter))
+
+            otel_handler = LoggingHandler(logger_provider=logger_provider)
+            logging.getLogger().addHandler(otel_handler)
+
+        trace_filter = TraceIdSpanIdFilter()
+        for handler in logging.getLogger().handlers:
+            handler.addFilter(trace_filter)
+
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "OpenTelemetry SDK/exporter setup skipped due to version mismatch: %s",
+            exc,
+        )
 
     init_telemetry(app)
 

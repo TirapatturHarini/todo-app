@@ -15,7 +15,8 @@ spec:
     spec:
       containers:
         - name: backend
-          image: harinitirapattur/todo-otel-app-backend:v47
+          image: harinitirapattur/todo-otel-app-backend:v47-hotfix
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
           env:
@@ -39,6 +40,9 @@ spec:
               value: postgres.observability.svc.cluster.local
             - name: POSTGRES_PORT
               value: "5432"
+            # CRITICAL: Set DATABASE_URL explicitly for K8s
+            - name: DATABASE_URL
+              value: "postgresql://todouser:todopass@postgres.observability.svc.cluster.local:5432/tododb"
           readinessProbe:
             httpGet:
               path: /health

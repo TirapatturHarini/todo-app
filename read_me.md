@@ -59,3 +59,7 @@ docker push harinitirapattur/todo-otel-app-backend:v23
 # for exemplars and business labels using the instrumented things v:30
 
 #demoed with 37 version of backend image
+
+# IMPORTANT: build backend image using backend Dockerfile only
+docker build --no-cache -f backend/Dockerfile -t harinitirapattur/todo-otel-app-backend:v46-backend backend
+docker push harinitirapattur/todo-otel-app-backend:v46-backend

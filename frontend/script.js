@@ -282,18 +282,6 @@ class TodoApp {
         `;
         document.head.appendChild(style);
     }
-    // for middleware
-    if (window.Middleware) {
-  Middleware.track({
-    serviceName: "test-todo",
-    projectName: "test-todo",
-    accountKey: "xxxxryevumc",
-    target: "https://fzcah.middleware.io",
-    defaultAttributes: {
-      "app.version": "1.0.0",
-    },
-  });
-}
 
 }
 
